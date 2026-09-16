@@ -36,6 +36,8 @@ function LoginPage() {
         return;
       }
       setMessage(result.message);
+    } catch {
+      setMessage("Could not reach the server — check your connection and try again.");
     } finally {
       setPending(false);
     }

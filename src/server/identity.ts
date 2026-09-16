@@ -249,6 +249,7 @@ export async function resolveConnectCard(
   let matched: PersonRow | null = null;
   let matchedOn: MatchedOn = "no_match_created";
   let ambiguousCandidates = 0;
+  let phoneNameMismatch = false;
 
   if (phoneE164) {
     const { rows } = await client.query<PersonRow>(
@@ -258,9 +259,18 @@ export async function resolveConnectCard(
       [churchId, phoneE164],
     );
     if (rows.length > 0) {
-      matched = rows[0];
-      matchedOn = "phone_e164";
-      ambiguousCandidates = rows.length - 1;
+      // A shared phone (household landline, one cell for a couple) is common —
+      // require the name to agree with at least one candidate before merging.
+      // Same phone + different name is a different household member, not the
+      // same person; never merge on phone alone.
+      const sameName = rows.filter((r) => normalizeName(r.first_name, r.last_name) === nameNormalized);
+      if (sameName.length > 0) {
+        matched = sameName[0];
+        matchedOn = "phone_e164";
+        ambiguousCandidates = sameName.length - 1;
+      } else {
+        phoneNameMismatch = true;
+      }
     }
   }
 
@@ -396,7 +406,9 @@ export async function resolveConnectCard(
     });
     householdCreated = household?.created ?? false;
 
-    if (ambiguousCandidates > 0) {
+    if (phoneNameMismatch) {
+      reviewFlag = "phone_shared_different_name";
+    } else if (ambiguousCandidates > 0) {
       reviewFlag = "possible_duplicate_name_only";
     } else if (input.visitReport === "returning") {
       // They told us they've been before and we have no record: either a real

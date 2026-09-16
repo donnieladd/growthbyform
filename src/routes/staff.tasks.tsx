@@ -214,6 +214,8 @@ function LogContactForm({ personId, personName }: { personId: string; personName
       } else {
         setOutcome({ tone: "bad", text: "You are signed out — sign in again to log a contact." });
       }
+    } catch {
+      setOutcome({ tone: "bad", text: "Could not reach the server — check your connection and try again." });
     } finally {
       setPending(false);
     }

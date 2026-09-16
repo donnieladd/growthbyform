@@ -329,7 +329,7 @@ export const PERSON_VISITS_SQL = `select
    s.matched_on
  from person_visits v
  left join connect_card_submissions s on s.visit_id = v.id
-where v.person_id = $1
+where v.person_id = $1 and v.church_id = $2
 order by v.visit_number asc`;
 
 export const PERSON_STAGE_HISTORY_SQL = `select
@@ -344,7 +344,7 @@ export const PERSON_STAGE_HISTORY_SQL = `select
  left join growth_track_stages fs on fs.id = h.from_stage_id
  left join growth_track_stages ts on ts.id = h.to_stage_id
  left join staff_users u on u.id = h.changed_by_staff_id
-where h.person_id = $1
+where h.person_id = $1 and h.church_id = $2
 order by h.changed_at desc, h.created_at desc`;
 
 export const PERSON_DECISIONS_SQL = `select
@@ -358,7 +358,7 @@ export const PERSON_DECISIONS_SQL = `select
  from decision_events d
  left join growth_track_stages s on s.id = d.stage_id_at_event
  left join staff_users u on u.id = d.recorded_by_staff_id
-where d.person_id = $1
+where d.person_id = $1 and d.church_id = $2
 order by d.occurred_at desc`;
 
 export const PERSON_INTERACTIONS_SQL = `select
@@ -369,7 +369,7 @@ export const PERSON_INTERACTIONS_SQL = `select
    u.name as staff_name
  from person_interactions i
  left join staff_users u on u.id = i.staff_user_id
-where i.person_id = $1
+where i.person_id = $1 and i.church_id = $2
 order by i.occurred_at desc, i.created_at desc`;
 
 export const PERSON_STEPS_SQL = `select
@@ -378,7 +378,7 @@ export const PERSON_STEPS_SQL = `select
    sc.step_name,
    to_char(sc.completed_at, 'YYYY-MM-DD"T"HH24:MI') as completed_on
  from step_completions sc
-where sc.person_id = $1
+where sc.person_id = $1 and sc.church_id = $2
 order by sc.completed_at desc`;
 
 export type PersonDetailRow = {
@@ -684,7 +684,7 @@ export async function fetchPersonRecord(
     children_text: string | null;
     household_members_text: string | null;
     matched_on: string | null;
-  }>(PERSON_VISITS_SQL, [personId]);
+  }>(PERSON_VISITS_SQL, [personId, churchId]);
 
   const stageHistory = await query<{
     id: string;
@@ -694,7 +694,7 @@ export async function fetchPersonRecord(
     reason: string | null;
     source: string;
     changed_by_name: string | null;
-  }>(PERSON_STAGE_HISTORY_SQL, [personId]);
+  }>(PERSON_STAGE_HISTORY_SQL, [personId, churchId]);
 
   const decisions = await query<{
     id: string;
@@ -704,7 +704,7 @@ export async function fetchPersonRecord(
     source: string;
     stage_name_at_event: string | null;
     recorded_by_name: string | null;
-  }>(PERSON_DECISIONS_SQL, [personId]);
+  }>(PERSON_DECISIONS_SQL, [personId, churchId]);
 
   const interactions = await query<{
     id: string;
@@ -712,14 +712,14 @@ export async function fetchPersonRecord(
     occurred_on: string | null;
     body: string | null;
     staff_name: string | null;
-  }>(PERSON_INTERACTIONS_SQL, [personId]);
+  }>(PERSON_INTERACTIONS_SQL, [personId, churchId]);
 
   const steps = await query<{
     id: string;
     step_key: string;
     step_name: string | null;
     completed_on: string | null;
-  }>(PERSON_STEPS_SQL, [personId]);
+  }>(PERSON_STEPS_SQL, [personId, churchId]);
 
   return {
     person: {

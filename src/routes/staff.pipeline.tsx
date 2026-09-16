@@ -158,7 +158,9 @@ function PersonCard({
     setPending(true);
     setOutcome(null);
     try {
-      const result = await movePersonStage({ data: { personId: card.id, toStageId: target } });
+      const result = await movePersonStage({
+        data: { personId: card.id, toStageId: target, expectedFromStageId: card.stageId },
+      });
       if (result.state === "ok") {
         setOutcome({ tone: "ok", text: result.message });
         await router.invalidate();
@@ -167,6 +169,12 @@ function PersonCard({
       } else {
         setOutcome({ tone: "bad", text: "You are signed out — sign in again to move somebody." });
       }
+    } catch {
+      // The RPC call itself threw (network drop, non-2xx, bad response) rather
+      // than the server function returning its usual result shape — say so
+      // instead of silently resetting to idle with no indication anything
+      // happened.
+      setOutcome({ tone: "bad", text: "Could not reach the server — check your connection and try again." });
     } finally {
       setPending(false);
     }

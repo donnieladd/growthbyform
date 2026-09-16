@@ -10,6 +10,7 @@ Everything needed to run, verify, build, and deploy the app.
 | `DB_DRIVER` | No | Set to `neon-http` to switch back to the original Neon HTTP helper in `src/db.ts`. Default uses `pg` over TCP. |
 | `PUBLIC_CHURCH_SLUG` | No | Only matters when more than one church exists. |
 | `SEED_STAFF_PASSWORD` | No | Overrides the demo staff password at seed time. |
+| `COOKIE_SECURE` | Set to `true` once real production TLS is confirmed | Controls the session cookie's `Secure` flag. Unset falls back to sniffing `x-forwarded-proto`, which only a trusted TLS-terminating proxy can be relied on to set honestly — a client can otherwise spoof that header. Set explicitly to `true` on real production deploys, `false` for plain-http local/dev. |
 
 ## Commands
 
