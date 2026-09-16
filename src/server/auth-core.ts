@@ -50,6 +50,24 @@ function burnPasswordTime(password: string): void {
   verifyPassword(password, dummyHash);
 }
 
+// Best-effort in-process rate limit on sign-in attempts, per account (same
+// pattern as connect.ts's submission limiter). Not a security boundary on its
+// own — a second process or a restart resets it — but it stops an unbounded
+// scripted password-guessing run against one account, which nothing else here
+// caps.
+const signInAttempts = new Map<string, number[]>();
+const SIGN_IN_WINDOW_MS = 10 * 60 * 1000;
+const SIGN_IN_MAX = 8;
+
+function signInRateLimited(emailLower: string): boolean {
+  const now = Date.now();
+  const recent = (signInAttempts.get(emailLower) ?? []).filter((t) => now - t < SIGN_IN_WINDOW_MS);
+  recent.push(now);
+  signInAttempts.set(emailLower, recent);
+  if (signInAttempts.size > 5_000) signInAttempts.clear();
+  return recent.length > SIGN_IN_MAX;
+}
+
 /** Resolve the opaque cookie token to a staff session, or say why we cannot. */
 export async function readStaffSession(token: string | null | undefined): Promise<SessionState> {
   if (!token) return { state: "signed-out" };
@@ -125,6 +143,10 @@ export async function signInWithPassword(
     // Same wording either way: an unauthenticated caller learns nothing about which
     // accounts exist.
     return { ok: false, message: "Enter your email and password." };
+  }
+  if (signInRateLimited(emailLower)) {
+    burnPasswordTime(password);
+    return { ok: false, message: "Too many attempts. Please try again in a few minutes." };
   }
   try {
     const candidates = await query<{ id: string; church_id: string; password_hash: string }>(

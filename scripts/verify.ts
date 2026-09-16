@@ -235,6 +235,48 @@ async function main(): Promise<void> {
       Number(counts.persons),
   );
 
+  console.log("\nIdentity resolution: a shared phone must not silently merge two different people (rolled back afterwards)");
+  const sharedPhone = `(737) 555-${String(1000 + Math.floor(Math.random() * 8999))}`;
+  try {
+    await withTransaction(async (client) => {
+      const first = await resolveConnectCard(client, counts.church_id, {
+        firstName: "Household",
+        lastName: "Anchor",
+        phone: sharedPhone,
+        visitReport: "first_time",
+        source: "connect_card",
+      });
+      check("the first person on the shared line is created normally", first.personCreated);
+
+      const second = await resolveConnectCard(client, counts.church_id, {
+        firstName: "Different",
+        lastName: "Person",
+        phone: sharedPhone,
+        visitReport: "first_time",
+        source: "connect_card",
+      });
+      check(
+        "a different name on the same phone is NOT merged into the first person",
+        second.personCreated && second.personId !== first.personId,
+        `personCreated=${String(second.personCreated)} sameId=${String(second.personId === first.personId)}`,
+      );
+      check(
+        "the mismatch is flagged for a human instead of guessed",
+        second.reviewFlag === "phone_shared_different_name",
+        String(second.reviewFlag),
+      );
+
+      throw new Rollback("verify: roll back phone-mismatch probe data");
+    });
+  } catch (err) {
+    if (!(err instanceof Rollback)) throw err;
+  }
+  check(
+    "phone-mismatch probe data was rolled back",
+    Number((await query<{ count: string }>(`select count(*) from persons where church_id = $1`, [counts.church_id]))[0].count) ===
+      Number(counts.persons),
+  );
+
   console.log("\nPipeline board and stall detection (slice 2)");
   const board = await fetchPipeline(withQuery, counts.church_id, counts.church_name);
   const boardCards = board.columns.flatMap((column) => column.cards);

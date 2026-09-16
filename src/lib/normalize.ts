@@ -16,8 +16,14 @@ export function normalizePhoneE164(
   defaultCountry = process.env.DEFAULT_PHONE_COUNTRY?.trim() || "US",
 ): string | null {
   if (!raw) return null;
-  const stripped = raw.trim();
-  if (!stripped) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  // Drop a trailing extension ("ext 205", "x205", "#205") before extracting
+  // digits — left in, the extension's digits fold into the number itself,
+  // producing a key that will never match the same person calling back with
+  // just their base number.
+  const withoutExt = trimmed.replace(/\s*(?:ext\.?|extension|x|#)\s*\d+\s*$/i, "");
+  const stripped = withoutExt || trimmed;
   const hasPlus = stripped.startsWith("+");
   const digits = stripped.replace(/\D/g, "");
   if (!digits) return null;
@@ -27,6 +33,9 @@ export function normalizePhoneE164(
   if (defaultCountry === "US") {
     if (digits.length === 10) return `+1${digits}`;
     if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+    // Doesn't fit either US shape (e.g. a non-US number entered without a `+`)
+    // — a bad key is worse than no key, so don't guess one.
+    return null;
   }
   return digits.length >= 8 && digits.length <= 15 ? `+${digits}` : null;
 }

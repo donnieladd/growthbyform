@@ -178,10 +178,14 @@ export const getCoachTasks = createServerFn({ method: "GET" })
  * dwell clock for the new stage starts counting from.
  */
 export const movePersonStage = createServerFn({ method: "POST" })
-  .validator((input: { personId?: unknown; toStageId?: unknown; reason?: unknown }) => ({
+  .validator((input: { personId?: unknown; toStageId?: unknown; reason?: unknown; expectedFromStageId?: unknown }) => ({
     personId: typeof input?.personId === "string" ? input.personId : "",
     toStageId: typeof input?.toStageId === "string" ? input.toStageId : "",
     reason: typeof input?.reason === "string" ? input.reason.slice(0, 400) : "",
+    // The stage the caller's board showed this person in when they clicked
+    // move. Optional so nothing else calling this breaks; when present, a
+    // mismatch means someone else moved this person since the board loaded.
+    expectedFromStageId: typeof input?.expectedFromStageId === "string" ? input.expectedFromStageId : null,
   }))
   .handler(async ({ data }): Promise<MoveStageResult> => {
     const [{ getCookie }, { requireStaff }, { withTransaction }] = await Promise.all([
@@ -216,16 +220,6 @@ export const movePersonStage = createServerFn({ method: "POST" })
           return { state: "error", message: "That person is not on this church's list." };
         }
 
-        const stage = (
-          await client.query<{ id: string; name: string }>(
-            `select id, name from growth_track_stages where id = $1 and church_id = $2`,
-            [data.toStageId, churchId],
-          )
-        ).rows[0];
-        if (!stage) {
-          return { state: "error", message: "That stage is not part of this church's track." };
-        }
-
         let fromStageName: string | null = null;
         if (person.current_stage_id) {
           const from = (
@@ -235,6 +229,23 @@ export const movePersonStage = createServerFn({ method: "POST" })
             )
           ).rows[0];
           fromStageName = from?.name ?? null;
+        }
+
+        if (data.expectedFromStageId && data.expectedFromStageId !== person.current_stage_id) {
+          return {
+            state: "error",
+            message: `${person.full_name} was already moved${fromStageName ? ` to ${fromStageName}` : ""} by someone else — refresh the board and try again.`,
+          };
+        }
+
+        const stage = (
+          await client.query<{ id: string; name: string }>(
+            `select id, name from growth_track_stages where id = $1 and church_id = $2`,
+            [data.toStageId, churchId],
+          )
+        ).rows[0];
+        if (!stage) {
+          return { state: "error", message: "That stage is not part of this church's track." };
         }
 
         if (person.current_stage_id === stage.id) {
@@ -265,10 +276,10 @@ export const movePersonStage = createServerFn({ method: "POST" })
         };
       });
     } catch (err) {
-      return {
-        state: "error",
-        message: err instanceof Error ? err.message : "That move did not save.",
-      };
+      // Log the real error server-side; never hand raw DB error text (constraint
+      // and column names) to the client.
+      console.error("movePersonStage failed", err);
+      return { state: "error", message: "That move did not save." };
     }
   });
 
@@ -335,6 +346,7 @@ export const logPersonInteraction = createServerFn({ method: "POST" })
         message: `Logged against ${person.full_name}. Stage and overdue status unchanged.`,
       };
     } catch (err) {
-      return { state: "error", message: err instanceof Error ? err.message : "That contact did not save." };
+      console.error("logPersonInteraction failed", err);
+      return { state: "error", message: "That contact did not save." };
     }
   });

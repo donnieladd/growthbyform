@@ -49,10 +49,21 @@ export const signInStaff = createServerFn({ method: "POST" })
       sameSite: "lax",
       path: "/",
       maxAge: outcome.maxAgeSeconds,
-      // The proxy in front of the sandbox forwards over http, so only claim secure
-      // when the original request really was https — a stray `secure` on http would
-      // make the cookie silently unsettable and lock staff out.
-      secure: getRequestHeader("x-forwarded-proto") === "https",
+      // x-forwarded-proto is client-suppliable and only safe to trust behind a
+      // proxy that overwrites it before the app sees it — which we can't assume
+      // by default. COOKIE_SECURE lets a real deployment declare that guarantee
+      // explicitly instead of inferring it from a spoofable header:
+      //   COOKIE_SECURE=true  — always mark the cookie secure (set this once the
+      //                         production proxy is confirmed to terminate TLS).
+      //   COOKIE_SECURE=false — never mark it secure (local/plain-http dev).
+      //   unset               — fall back to sniffing x-forwarded-proto, which is
+      //                         what the sandbox's http-forwarding proxy needs.
+      secure:
+        process.env.COOKIE_SECURE === "true"
+          ? true
+          : process.env.COOKIE_SECURE === "false"
+            ? false
+            : getRequestHeader("x-forwarded-proto") === "https",
     });
     return { ok: true };
   });
