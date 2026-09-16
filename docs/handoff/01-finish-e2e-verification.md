@@ -1,12 +1,31 @@
 # Task 01 — Finish end-to-end verification against the production DB
 
 **Backlog id:** `5a6304fa-f0a2-400e-b369-4ac5ba04f0cb`
-**Status:** In progress at handoff. Capture (the hardest part) already verified.
+**Status: DONE (2026-09-16)** — with one environmental caveat that moves to task 03.
 
-## Goal
+## Result
+
+All flows verified in real Chromium against the production database (via a dev server on port 3100
+serving this exact tree with `DATABASE_URL` set — port 3000's managed server lacked the variable in
+its process environment; see RUNBOOK.md / task 03):
+
+1. **Capture — new guest:** full card → "First visit recorded / New record created / You are on the
+   track at: First-Time Guest"; DB: person + household + visit #1, `matched_on='no_match_created'`.
+2. **Capture — near-duplicate:** same phone, different email → "Visit #2 recorded / Matched an
+   existing record"; DB: same person id, `visit_count=2`, `matched_on='phone_e164'`, no duplicate.
+3. **Staff auth:** demo owner sign-in → dashboard with real data (12 people, 5 overdue).
+4. **Pipeline move + audit:** moved TEST guest forward and back via the card control; DB shows
+   exactly 3 `stage_history` rows including actor, reason, and source (`staff_entry`); clock restarted.
+5. **Stall detection:** task list shows the 5 seeded overdue people, numbers identical to the
+   `person_stage_clock` view; fresh test guest absent ("On pace").
+
+Not verifiable: recording a decision event from the UI — the feature does not exist (that is task 02 /
+slice 3). Full details: `docs/VERIFICATION.md` and `docs/verification-engineer.md` in the repo.
+
+## Original brief (kept for reference)
 
 Prove the whole MVP flow by clicking it in a real browser against the working site
-(`http://localhost:3000`) with `DATABASE_URL` injected — this is the gate before publishing (task 03).
+(`http://localhost:3000`) with `DATABASE_URL` injected — the gate before publishing (task 03).
 
 ## Already verified (do not redo)
 

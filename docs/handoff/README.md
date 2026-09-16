@@ -42,8 +42,9 @@ there, not to working notes.
 
 ## Ground rules (non-negotiable, learned the hard way)
 
-1. **No git commands in `/home/team/shared/site`** unless the GitHub sync (task 06) is being done
-   deliberately — the tree is the live deploy source.
+1. **Git is wired now.** The tree is a repo synced to `donnieladd/growthbyform` (initial sync commit
+   `3b641fc`, 2026-09-16). Pull before work, commit to `main` and push after — no branches, no
+   history rewrites (this tree is the live deploy source). See WORKFLOW.md.
 2. **Never write a `.env` file.** Secrets come from `process.env` only; `.env` doesn't publish.
 3. **Never restart or kill the platform-managed server** on port 3000 — it hot-reloads edits.
 4. **The lead publishes** (`publish_site` tool) — members never run `publish.sh`.
