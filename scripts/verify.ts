@@ -499,6 +499,87 @@ async function main(): Promise<void> {
       `${reverted.interactions} interaction(s) still on the record`,
   );
 
+  console.log("\nRecording a decision event never moves the person (rolled back afterwards)");
+  try {
+    await withTransaction(async (client) => {
+      const before = (
+        await client.query<{ current_stage_id: string; stage_changed_at: Date }>(
+          `select current_stage_id, stage_changed_at from persons where id = $1`,
+          [probeTarget.id],
+        )
+      ).rows[0];
+
+      await client.query(
+        `insert into decision_events
+           (church_id, person_id, event_type, occurred_at, stage_id_at_event, source, notes, recorded_by_staff_id)
+         values ($1, $2, 'salvation', now(), $3, 'staff_entry', 'verify probe: first decision', $4)`,
+        [counts.church_id, probeTarget.id, before.current_stage_id, owner.id],
+      );
+
+      const afterFirst = (
+        await client.query<{ current_stage_id: string; stage_changed_at: Date }>(
+          `select current_stage_id, stage_changed_at from persons where id = $1`,
+          [probeTarget.id],
+        )
+      ).rows[0];
+      check(
+        "recording a decision does NOT move the person's stage",
+        afterFirst.current_stage_id === before.current_stage_id,
+      );
+      check(
+        "recording a decision does NOT restart the dwell clock",
+        new Date(afterFirst.stage_changed_at).getTime() === new Date(before.stage_changed_at).getTime(),
+      );
+
+      // Decisions are repeatable facts, not a one-per-person slot — a second,
+      // different kind for the same person must also succeed.
+      await client.query(
+        `insert into decision_events
+           (church_id, person_id, event_type, occurred_at, stage_id_at_event, source, notes, recorded_by_staff_id)
+         values ($1, $2, 'rededication', now(), $3, 'staff_entry', 'verify probe: second decision', $4)`,
+        [counts.church_id, probeTarget.id, before.current_stage_id, owner.id],
+      );
+      const decisionCount = Number(
+        (
+          await client.query<{ count: string }>(
+            `select count(*)::text as count from decision_events where person_id = $1 and notes like 'verify probe:%'`,
+            [probeTarget.id],
+          )
+        ).rows[0].count,
+      );
+      check(
+        "a second decision for the same person is recorded, not rejected",
+        decisionCount === 2,
+        `${String(decisionCount)} probe decisions`,
+      );
+
+      const afterSecond = (
+        await client.query<{ current_stage_id: string; stage_changed_at: Date }>(
+          `select current_stage_id, stage_changed_at from persons where id = $1`,
+          [probeTarget.id],
+        )
+      ).rows[0];
+      check(
+        "a second decision still does NOT move the stage or clock",
+        afterSecond.current_stage_id === before.current_stage_id &&
+          new Date(afterSecond.stage_changed_at).getTime() === new Date(before.stage_changed_at).getTime(),
+      );
+
+      throw new Rollback("verify: roll back decision-event probes");
+    });
+  } catch (err) {
+    if (!(err instanceof Rollback)) throw err;
+  }
+  const decisionCountAfterRollback = Number(
+    (
+      await query<{ count: string }>(
+        `select count(*)::text as count from decision_events where person_id = $1 and notes like 'verify probe:%'`,
+        [probeTarget.id],
+      )
+    )[0].count,
+  );
+  check("decision-event probes were rolled back", decisionCountAfterRollback === 0);
+
   console.log("\nThe read-only person record");
   const record = await fetchPersonRecord(withQuery, counts.church_id, probeTarget.id);
   check("the record returns the person", record !== null && record.person.id === probeTarget.id);
