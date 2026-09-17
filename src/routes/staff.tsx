@@ -68,6 +68,15 @@ function StaffLayout() {
             >
               People
             </Link>
+            {staff.role === "owner" ? (
+              <Link
+                to="/staff/track"
+                className="text-slate-600 hover:text-slate-900"
+                activeProps={{ className: "font-medium text-slate-900" }}
+              >
+                Track config
+              </Link>
+            ) : null}
           </div>
         </div>
         <div className="text-right text-xs text-slate-500">

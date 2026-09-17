@@ -541,6 +541,141 @@ async function main(): Promise<void> {
     ) === 0,
   );
 
+  console.log("\nSelf-serve track configuration (rolled back afterwards)");
+  try {
+    await withTransaction(async (client) => {
+      const [config] = (
+        await client.query<{ id: string }>(
+          `select id from growth_track_configs where church_id = $1 and is_active`,
+          [counts.church_id],
+        )
+      ).rows;
+      const stages = (
+        await client.query<{ id: string; sequence: number; checkpoint_kind: string | null; name: string }>(
+          `select id, sequence, checkpoint_kind, name from growth_track_stages
+            where config_id = $1 order by sequence`,
+          [config.id],
+        )
+      ).rows;
+
+      // ---- safe rename: the id never moves, so nothing downstream can orphan ----
+      const renameTarget = stages[0];
+      await client.query(`update growth_track_stages set name = $1 where id = $2`, [
+        "Verify Probe Renamed Stage",
+        renameTarget.id,
+      ]);
+      const renamed = (
+        await client.query<{ id: string; name: string }>(
+          `select id, name from growth_track_stages where id = $1`,
+          [renameTarget.id],
+        )
+      ).rows[0];
+      check(
+        "renaming a stage keeps its id — history stays attached",
+        renamed.id === renameTarget.id && renamed.name === "Verify Probe Renamed Stage",
+      );
+
+      // ---- reordering: the +100000 offset trick must not collide with the
+      // (config_id, sequence) unique constraint mid-update. Mirrors the real
+      // save path exactly: bump every stage out of the way, then reassign
+      // every stage its final 1..N sequence in one pass — not just the two
+      // being swapped, or the untouched stages are left stranded at the
+      // offset and every checkpoint-position rule breaks by accident.
+      const swapped = [...stages];
+      const lastIndex = swapped.length - 1;
+      [swapped[lastIndex], swapped[lastIndex - 1]] = [swapped[lastIndex - 1], swapped[lastIndex]];
+
+      await client.query(`update growth_track_stages set sequence = sequence + 100000 where config_id = $1`, [
+        config.id,
+      ]);
+      for (let i = 0; i < swapped.length; i++) {
+        await client.query(`update growth_track_stages set sequence = $1 where id = $2`, [i + 1, swapped[i].id]);
+      }
+
+      const reordered = (
+        await client.query<{ id: string; sequence: number }>(
+          `select id, sequence from growth_track_stages where config_id = $1 order by sequence`,
+          [config.id],
+        )
+      ).rows;
+      check(
+        "reordering swaps the last two stages with no unique-constraint collision",
+        reordered.length === swapped.length && reordered.every((r, i) => r.id === swapped[i].id),
+      );
+
+      // ---- an edit that breaks a checkpoint rule is refused, with a readable
+      // reason — the same function the save path calls, exercised on an actual
+      // edit rather than just the untouched seeded config ----
+      const deploymentStage = stages.find((s) => s.checkpoint_kind === "deployment");
+      if (deploymentStage) {
+        await client.query(`update growth_track_stages set checkpoint_kind = null where id = $1`, [
+          deploymentStage.id,
+        ]);
+        const [broken] = (
+          await client.query<{ is_valid: boolean; errors: string[] }>(
+            `select is_valid, errors from validate_growth_track_config($1)`,
+            [config.id],
+          )
+        ).rows;
+        check(
+          "removing the deployment checkpoint is refused with a readable reason",
+          broken.is_valid === false && broken.errors.some((e) => e.includes("deployment")),
+          broken.errors.join("; "),
+        );
+        await client.query(`update growth_track_stages set checkpoint_kind = $1 where id = $2`, [
+          deploymentStage.checkpoint_kind,
+          deploymentStage.id,
+        ]);
+      }
+
+      // ---- deleting a stage that history points to is refused by the database
+      // itself (no ON DELETE CASCADE from stage_history/persons/step_completions)
+      // — the exact guarantee "safe stage renames" trades off against ----
+      const stageWithHistory = (
+        await client.query<{ id: string }>(
+          `select distinct s.id
+             from growth_track_stages s
+             join stage_history h on h.to_stage_id = s.id
+            where s.config_id = $1
+            limit 1`,
+          [config.id],
+        )
+      ).rows[0];
+      if (stageWithHistory) {
+        let refused = false;
+        let code: string | undefined;
+        try {
+          await client.query(`delete from growth_track_stages where id = $1`, [stageWithHistory.id]);
+        } catch (err) {
+          refused = true;
+          code = (err as { code?: string }).code;
+        }
+        check(
+          "deleting a stage that history points to is refused by the database",
+          refused && code === "23503",
+          `code=${String(code)}`,
+        );
+      }
+
+      throw new Rollback("verify: roll back track-config probes");
+    });
+  } catch (err) {
+    if (!(err instanceof Rollback)) throw err;
+  }
+  const [configAfter] = await query<{ id: string }>(
+    `select id from growth_track_configs where church_id = $1 and is_active`,
+    [counts.church_id],
+  );
+  const stagesAfter = await query<{ name: string }>(
+    `select name from growth_track_stages where config_id = $1 order by sequence limit 1`,
+    [configAfter.id],
+  );
+  check(
+    "track-config probes were rolled back",
+    stagesAfter[0]?.name !== "Verify Probe Renamed Stage",
+    stagesAfter[0]?.name,
+  );
+
   console.log(
     `\n${failures === 0 ? "All checks passed." : `${String(failures)} check(s) FAILED.`} (pre-flight hash smoke: ${hashPassword("x").startsWith("scrypt$") ? "scrypt ok" : "scrypt broken"})`,
   );
