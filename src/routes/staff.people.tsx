@@ -61,7 +61,7 @@ function PeoplePage() {
         <Notice tone="warn" title={`${String(summary.needsReview)} record(s) flagged during capture`}>
           Capture refuses to guess when two people might be the same person. Those records carry a
           flag so somebody can merge them — a possible duplicate stays visible instead of quietly
-          creating a twin.
+          creating a twin. <Link to="/staff/review" className="font-medium underline">Open the review queue</Link>.
         </Notice>
       ) : null}
 
@@ -103,7 +103,9 @@ function PeoplePage() {
                         </div>
                         {person.reviewFlag ? (
                           <div className="mt-1">
-                            <Badge tone="warn">needs a human: {person.reviewFlag.replaceAll("_", " ")}</Badge>
+                            <Link to="/staff/review/$id" params={{ id: person.id }}>
+                              <Badge tone="warn">needs a human: {person.reviewFlag.replaceAll("_", " ")}</Badge>
+                            </Link>
                           </div>
                         ) : null}
                       </td>
