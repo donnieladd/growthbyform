@@ -2,6 +2,25 @@
 
 Everything needed to run, verify, build, and deploy the app.
 
+## Git workflow (current, as of 2026-09-17)
+
+This repo (`donnieladd/growthbyform` on GitHub) is now the canonical source of truth — the
+"Serving topology" section below predates that and describes an earlier platform-managed tree
+(`/home/team/shared/site`) that this repo has since superseded as the record of what's built.
+That section is kept below for its still-relevant operational detail, not as the current model of
+where work happens.
+
+Actual flow:
+
+1. `git pull origin main` before starting anything — never assume your local `main` is current.
+2. One focused branch per task, off `main` (`git checkout -b feat/...` or `fix/...`).
+3. Push early, open a **draft** PR — don't wait for the work to be "finished" to make it visible.
+4. Keep PRs **draft** until the repo owner explicitly authorizes a merge. Multiple draft PRs sitting
+   open and unmerged at once is the expected state, not a backlog problem — merging is a deliberate,
+   owner-gated step per `form-build-ops`'s traceable-chain standard, separate from the work being
+   done and reviewable.
+5. Never push directly to `main`.
+
 ## Environment variables
 
 | Variable | Required | Purpose |
@@ -14,7 +33,7 @@ Everything needed to run, verify, build, and deploy the app.
 ## Commands
 
 ```bash
-cd /home/team/shared/site
+# from the repo root
 bun install
 bun run db:migrate      # apply pending migrations (0001, 0002, 0003)
 bun run db:status       # show applied / pending migrations only
