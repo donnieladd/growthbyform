@@ -1,13 +1,15 @@
-// The read-only person record. One person, everything the church knows, in one
-// place: contact details, household, what they told us on the way in, where they
-// stand on the track and how long they have stood there, every stage move, every
-// decision, and every contact anybody has logged.
+// The person record. Contact details, household, what they told us on the way
+// in, where they stand on the track and how long they have stood there, every
+// stage move, every decision, and every contact anybody has logged — plus,
+// as of slice 3, recording a new decision event from this page.
 //
-// Display only — recording decision events, editing and merging are slice 3.
+// Editing details and merging duplicates remain a later slice.
 
-import { Link, createFileRoute } from "@tanstack/react-router";
-import { Badge, Card, KeyValue, Notice } from "~/components/ui";
+import { Link, createFileRoute, useRouter } from "@tanstack/react-router";
+import { useState } from "react";
+import { Badge, Card, KeyValue, Notice, buttonClass, inputClass } from "~/components/ui";
 import {
+  DECISION_LABELS,
   decisionLabel,
   durationDays,
   formatDay,
@@ -18,6 +20,7 @@ import {
   VISIT_REPORT_LABELS,
 } from "~/lib/format";
 import { getPersonRecord } from "~/server/person";
+import { DECISION_KINDS, logDecisionEvent, type DecisionKind } from "~/server/decisions";
 
 export const Route = createFileRoute("/staff/people/$id")({
   loader: async ({ params }) => await getPersonRecord({ data: { personId: params.id } }),
@@ -242,6 +245,9 @@ function PersonRecordPage() {
           <p className="mt-3 text-xs text-slate-500">
             A decision never moves anybody on the board — the stage shown above is a separate fact.
           </p>
+          <div className="mt-4 border-t border-slate-100 pt-4">
+            <LogDecisionForm personId={person.id} personName={person.fullName} />
+          </div>
         </Card>
 
         <Card
@@ -292,9 +298,85 @@ function PersonRecordPage() {
       </div>
 
       <p className="text-xs text-slate-500">
-        Recording a decision event, editing details and merging possible duplicates are the next
-        slice. This page only reads.
+        Editing details and merging possible duplicates are a later slice. Everything else on this
+        page reads live.
       </p>
     </div>
+  );
+}
+
+function LogDecisionForm({ personId, personName }: { personId: string; personName: string }) {
+  const router = useRouter();
+  const [kind, setKind] = useState<DecisionKind>("salvation");
+  const [occurredOn, setOccurredOn] = useState("");
+  const [notes, setNotes] = useState("");
+  const [pending, setPending] = useState(false);
+  const [outcome, setOutcome] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
+
+  async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPending(true);
+    setOutcome(null);
+    try {
+      const result = await logDecisionEvent({ data: { personId, kind, occurredOn, notes } });
+      if (result.state === "ok") {
+        setNotes("");
+        setOutcome({ tone: "ok", text: result.message });
+        await router.invalidate();
+      } else if (result.state === "error") {
+        setOutcome({ tone: "bad", text: result.message });
+      } else {
+        setOutcome({ tone: "bad", text: "You are signed out — sign in again to log a decision." });
+      }
+    } catch {
+      setOutcome({ tone: "bad", text: "Could not reach the server — check your connection and try again." });
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <form onSubmit={onSubmit} className="space-y-2">
+      <p className="text-xs font-medium text-slate-700">Log a decision for {personName}</p>
+      <div className="flex flex-wrap items-end gap-2">
+        <select
+          aria-label={`What kind of decision for ${personName}?`}
+          className={`${inputClass} mt-0 w-auto py-1 text-xs`}
+          value={kind}
+          onChange={(event) => setKind(event.target.value as DecisionKind)}
+        >
+          {DECISION_KINDS.map((value) => (
+            <option key={value} value={value}>
+              {DECISION_LABELS[value]}
+            </option>
+          ))}
+        </select>
+        <input
+          type="date"
+          aria-label={`Date of the decision for ${personName}`}
+          className={`${inputClass} mt-0 w-auto py-1 text-xs`}
+          value={occurredOn}
+          onChange={(event) => setOccurredOn(event.target.value)}
+        />
+        <button type="submit" disabled={pending} className={`${buttonClass} shrink-0 px-3 py-1 text-xs`}>
+          {pending ? "Saving…" : "Log decision"}
+        </button>
+      </div>
+      <input
+        aria-label={`Note for the decision for ${personName} (optional)`}
+        className={`${inputClass} mt-0 py-1 text-xs`}
+        placeholder="Optional note"
+        value={notes}
+        onChange={(event) => setNotes(event.target.value)}
+      />
+      {outcome ? (
+        <p
+          role="status"
+          className={`text-[11px] font-medium ${outcome.tone === "ok" ? "text-emerald-700" : "text-rose-600"}`}
+        >
+          {outcome.text}
+        </p>
+      ) : null}
+    </form>
   );
 }
