@@ -68,6 +68,13 @@ function StaffLayout() {
             >
               People
             </Link>
+            <Link
+              to="/staff/review"
+              className="text-slate-600 hover:text-slate-900"
+              activeProps={{ className: "font-medium text-slate-900" }}
+            >
+              Review
+            </Link>
           </div>
         </div>
         <div className="text-right text-xs text-slate-500">

@@ -541,6 +541,168 @@ async function main(): Promise<void> {
     ) === 0,
   );
 
+  console.log("\nMerging two people re-points their history without loss (rolled back afterwards)");
+  try {
+    await withTransaction(async (client) => {
+      const churchId = counts.church_id;
+
+      const [personA] = (
+        await client.query<{ id: string }>(
+          `insert into persons (church_id, first_name, last_name, name_normalized, email, email_lower, phone, phone_e164, review_flag)
+           values ($1, 'Verify', 'ProbeA', 'verify probea', 'verify.probea@example.com', 'verify.probea@example.com',
+                   '5125550001', '+15125550001', 'possible_duplicate_name_only')
+           returning id`,
+          [churchId],
+        )
+      ).rows;
+      const [personB] = (
+        await client.query<{ id: string }>(
+          `insert into persons (church_id, first_name, last_name, name_normalized)
+           values ($1, 'Verify', 'ProbeB', 'verify probeb')
+           returning id`,
+          [churchId],
+        )
+      ).rows;
+
+      // Both get visit_number = 1 — the exact collision the renumbering has to handle.
+      await client.query(
+        `insert into person_visits (church_id, person_id, visit_number, source) values ($1, $2, 1, 'staff_entry')`,
+        [churchId, personA.id],
+      );
+      await client.query(
+        `insert into person_visits (church_id, person_id, visit_number, source) values ($1, $2, 1, 'staff_entry')`,
+        [churchId, personB.id],
+      );
+
+      // Both complete the same step (the collision case for step_completions'
+      // (person_id, step_key) unique constraint) — plus one step only B has,
+      // to confirm a non-colliding row still moves over rather than being
+      // dropped along with the real duplicate.
+      await client.query(
+        `insert into step_completions (church_id, person_id, step_key, step_name) values ($1, $2, 'verify_step', 'Verify Step')`,
+        [churchId, personA.id],
+      );
+      await client.query(
+        `insert into step_completions (church_id, person_id, step_key, step_name) values ($1, $2, 'verify_step', 'Verify Step')`,
+        [churchId, personB.id],
+      );
+      await client.query(
+        `insert into step_completions (church_id, person_id, step_key, step_name) values ($1, $2, 'verify_step_unique', 'Verify Unique Step')`,
+        [churchId, personB.id],
+      );
+
+      await client.query(`insert into decision_events (church_id, person_id, event_type) values ($1, $2, 'salvation')`, [
+        churchId,
+        personB.id,
+      ]);
+      await client.query(
+        `insert into person_interactions (church_id, person_id, kind, occurred_at) values ($1, $2, 'note', now())`,
+        [churchId, personB.id],
+      );
+
+      // ---- the exact sequence src/server/review.ts's mergePersons runs ----
+      const [{ max_visit }] = (
+        await client.query<{ max_visit: number }>(
+          `select coalesce(max(visit_number), 0) as max_visit from person_visits where person_id = $1`,
+          [personA.id],
+        )
+      ).rows;
+      await client.query(
+        `update person_visits pv
+            set person_id = $1, visit_number = sub.rn + $2
+           from (
+             select id, row_number() over (order by visit_number) as rn
+               from person_visits where person_id = $3
+           ) sub
+          where pv.id = sub.id`,
+        [personA.id, max_visit, personB.id],
+      );
+      await client.query(
+        `delete from step_completions
+          where person_id = $1
+            and step_key in (select step_key from step_completions where person_id = $2)`,
+        [personB.id, personA.id],
+      );
+      await client.query(`update step_completions set person_id = $1 where person_id = $2`, [personA.id, personB.id]);
+      await client.query(`update decision_events set person_id = $1 where person_id = $2`, [personA.id, personB.id]);
+      await client.query(`update person_interactions set person_id = $1 where person_id = $2`, [personA.id, personB.id]);
+      await client.query(`update persons set review_flag = null where id = $1`, [personA.id]);
+      await client.query(
+        `insert into person_merges (church_id, kept_person_id, merged_person_snapshot, reason)
+         values ($1, $2, to_jsonb((select m from (select * from persons where id = $3) m)), 'verify probe')`,
+        [churchId, personA.id, personB.id],
+      );
+      await client.query(`delete from persons where id = $1`, [personB.id]);
+
+      // ---- assertions ----
+      const visits = (
+        await client.query<{ visit_number: number }>(
+          `select visit_number from person_visits where person_id = $1 order by visit_number`,
+          [personA.id],
+        )
+      ).rows;
+      check(
+        "merged visits are renumbered without colliding",
+        visits.length === 2 && visits[0].visit_number === 1 && visits[1].visit_number === 2,
+        visits.map((v) => v.visit_number).join(","),
+      );
+
+      const steps = (
+        await client.query<{ step_key: string }>(`select step_key from step_completions where person_id = $1 order by step_key`, [
+          personA.id,
+        ])
+      ).rows;
+      check(
+        "a colliding step completion is dropped, not duplicated",
+        steps.filter((s) => s.step_key === "verify_step").length === 1,
+        JSON.stringify(steps.map((s) => s.step_key)),
+      );
+      check(
+        "a non-colliding step completion still moves over",
+        steps.some((s) => s.step_key === "verify_step_unique"),
+      );
+
+      const [decisionCount] = (
+        await client.query<{ count: string }>(`select count(*)::text as count from decision_events where person_id = $1`, [
+          personA.id,
+        ])
+      ).rows;
+      check("decisions move to the survivor", Number(decisionCount.count) === 1);
+
+      const goneRow = (await client.query<{ id: string }>(`select id from persons where id = $1`, [personB.id])).rows[0];
+      check("the merged-away person row is gone", goneRow === undefined);
+
+      const [survivor] = (
+        await client.query<{ review_flag: string | null; visit_count: number }>(
+          `select review_flag, visit_count from persons where id = $1`,
+          [personA.id],
+        )
+      ).rows;
+      check("the survivor's review flag is cleared", survivor.review_flag === null);
+      check(
+        "the survivor's visit_count rollup reflects the merge — proves the existing trigger fired on the re-point, not something this code computed by hand",
+        survivor.visit_count === 2,
+        String(survivor.visit_count),
+      );
+
+      const [auditRow] = (
+        await client.query<{ kept_person_id: string }>(
+          `select kept_person_id from person_merges where church_id = $1 order by created_at desc limit 1`,
+          [churchId],
+        )
+      ).rows;
+      check("a merge audit row was written", auditRow?.kept_person_id === personA.id);
+
+      throw new Rollback("verify: roll back merge probe");
+    });
+  } catch (err) {
+    if (!(err instanceof Rollback)) throw err;
+  }
+  const [mergeProbeRemnant] = await query<{ count: string }>(
+    `select count(*)::text as count from persons where name_normalized in ('verify probea', 'verify probeb')`,
+  );
+  check("merge probe data was rolled back", Number(mergeProbeRemnant.count) === 0);
+
   console.log(
     `\n${failures === 0 ? "All checks passed." : `${String(failures)} check(s) FAILED.`} (pre-flight hash smoke: ${hashPassword("x").startsWith("scrypt$") ? "scrypt ok" : "scrypt broken"})`,
   );
